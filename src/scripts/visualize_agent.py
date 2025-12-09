@@ -14,6 +14,7 @@ if SRC_DIR not in sys.path:
 from envs.factory import make_env
 from agents.td3_agent import TD3Agent
 from agents.td3_bc_agent import TD3BCAgent
+from stable_baselines3 import PPO as SB3PPO
 
 def visualize(model_path, env_id="PointMaze_Medium-v3", seed=5, episodes=5):
     # 1. Setup Environment (Human Render Mode for Window)
@@ -86,7 +87,75 @@ def visualize(model_path, env_id="PointMaze_Medium-v3", seed=5, episodes=5):
 
     env.close()
 
+def visualize_ppo(model_path, env_id="PointMaze_Medium-v3", seed=5, episodes=5, render=True):
+    """Visualize an SB3 PPO policy saved as a .zip file."""
+    print(f"Launching {env_id} PPO visualization...")
+    env = make_env(env_id, seed=seed, is_eval=True, render_mode="human")
+
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"PPO model not found at: {model_path}")
+
+    print(f"Loading PPO model from: {model_path}")
+    model = SB3PPO.load(model_path)
+
+    for ep in range(episodes):
+        obs, _ = env.reset()
+        done = False
+        truncated = False
+        step = 0
+        total_reward = 0.0
+
+        print(f"\n--- PPO Episode {ep + 1} ---")
+        while not (done or truncated):
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, truncated, info = env.step(action)
+            total_reward += reward
+            step += 1
+
+            if render:
+                env.render()
+
+            print(f"\rStep: {step:03d} | Reward: {reward: .4f}", end="")
+            time.sleep(0.03)
+
+        end_status = "GOAL REACHED!" if info.get("is_success") else "FAILED (Time Limit)"
+        print(f"\nResult: {end_status} | Total Reward: {total_reward:.2f}")
+        time.sleep(1.0)
+
+    env.close()
+
+
 if __name__ == "__main__":
-    # You can run this directly or pass arguments
-    MODEL_PATH = "./models/best_model" 
-    visualize(MODEL_PATH)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--algo", type=str, default="td3",
+                        choices=["td3", "td3bc", "ppo"],
+                        help="Which algorithm to visualize")
+    parser.add_argument("--model_path", type=str, required=True,
+                        help="Path to model. "
+                             "TD3/TD3BC: base path without _actor.pth; "
+                             "PPO: full .zip path")
+    parser.add_argument("--env_id", type=str, default="PointMaze_Medium-v3")
+    parser.add_argument("--seed", type=int, default=5)
+    parser.add_argument("--episodes", type=int, default=5)
+    parser.add_argument("--no_render", action="store_true",
+                        help="Disable env.render() for PPO")
+
+    args = parser.parse_args()
+
+    if args.algo == "ppo":
+        # PPO
+        visualize_ppo(
+            model_path=args.model_path,
+            env_id=args.env_id,
+            seed=args.seed,
+            episodes=args.episodes,
+            render=not args.no_render,
+        )
+    else:
+        # TD3 / TD3BC
+        visualize(
+            model_path=args.model_path,
+            env_id=args.env_id,
+            seed=args.seed,
+            episodes=args.episodes,
+        )
