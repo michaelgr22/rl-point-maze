@@ -1,12 +1,19 @@
 import time
 import torch
 import numpy as np
-import os
+import os, sys
 import argparse
+FILE_DIR = os.path.dirname(os.path.abspath(__file__))     # src/scripts
+SRC_DIR  = os.path.dirname(FILE_DIR)                      # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                       # project root
+
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 # Import from your modular project structure
 from envs.factory import make_env
 from agents.td3_agent import TD3Agent
+from agents.td3_bc_agent import TD3BCAgent
 
 def visualize(model_path, env_id="PointMaze_Medium-v3", seed=5, episodes=5):
     # 1. Setup Environment (Human Render Mode for Window)
@@ -19,7 +26,13 @@ def visualize(model_path, env_id="PointMaze_Medium-v3", seed=5, episodes=5):
     max_action = float(env.action_space.high[0])
     
     device = torch.device("cpu") # CPU is fine for inference/watching
-    agent = TD3Agent(s_dim, a_dim, max_action, device=device)
+
+    if "bc" in model_path.lower():
+        print("Using TD3BCAgent for offline training.")
+        agent = TD3BCAgent(s_dim, a_dim, max_action, device)
+    else:
+        print("Using TD3Agent for online training.")
+        agent = TD3Agent(s_dim, a_dim, max_action, device=device)
 
     # 3. Load Weights
     if os.path.exists(model_path + "_actor.pth"):

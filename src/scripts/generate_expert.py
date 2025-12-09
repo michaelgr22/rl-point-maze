@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 ENV_ID = "PointMaze_Medium-v3"
 TOTAL_EPISODES = 1000        # Set this to how many episodes you want to record
 OUTPUT_FILE = "expert_data_hires.pkl"
-SHOW_VISUALIZATION = True # Set True to watch the agent live
+SHOW_VISUALIZATION = False # Set True to watch the agent live
 RESOLUTION_SCALE = 10     # High resolution for smooth paths
 
 MANUAL_OFFSET_X = -0.5 # Try -1.2 first (shifts grid Center Left)
