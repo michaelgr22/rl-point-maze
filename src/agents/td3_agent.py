@@ -97,5 +97,5 @@ class TD3Agent:
         torch.save(self.critic.state_dict(), filename + "_critic.pth")
 
     def load(self, filename):
-        self.actor.load_state_dict(torch.load(filename + "_actor.pth"))
-        self.critic.load_state_dict(torch.load(filename + "_critic.pth"))
+        self.actor.load_state_dict(torch.load(filename + "_actor.pth", map_location="cpu"))
+        self.critic.load_state_dict(torch.load(filename + "_critic.pth", map_location="cpu"))
