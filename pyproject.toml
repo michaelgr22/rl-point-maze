@@ -10,10 +10,12 @@ requires-python = ">=3.9"
 dependencies = [
     "gymnasium[mujoco]",
     "gymnasium-robotics",
+    "stable-baselines3[extra]",
     "torch>=2.0.0",
     "numpy",
     "tensorboard",
-    "moviepy"
+    "moviepy",
+    "PyYAML"
 ]
 
 [project.optional-dependencies]
