@@ -9,26 +9,35 @@ import matplotlib.pyplot as plt
 ENV_ID = "PointMaze_Medium-v3"
 TOTAL_EPISODES = 1000        # Set this to how many episodes you want to record
 OUTPUT_FILE = "expert_data_hires.pkl"
-SHOW_VISUALIZATION = True # Set True to watch the agent live
+SHOW_VISUALIZATION = False # Set True to watch the agent live
 RESOLUTION_SCALE = 10     # High resolution for smooth paths
 
-MANUAL_OFFSET_X = -0.5 # Try -1.2 first (shifts grid Center Left)
-MANUAL_OFFSET_Y = -0.4  # Slight adjustment Up might be needed too
+#MANUAL_OFFSET_X = -0.5 # Try -1.2 first (shifts grid Center Left)
+#MANUAL_OFFSET_Y = -0.4  # Slight adjustment Up might be needed too
+MANUAL_OFFSET_X = 0
+MANUAL_OFFSET_Y = 0
 
 # --- 1. COORDINATE MAPPING ---
 def world_to_grid(x, y, shape):
-    rows, cols = shape 
-    off_x = (cols // 2) + 0.5 + MANUAL_OFFSET_X
-    off_y = (rows // 2) + 0.5 + MANUAL_OFFSET_Y
+    rows, cols = shape
+    # Use float division / 2.0 to handle both even (4x4) and odd (5x5) maps correctly
+    # If 5x5: 5/2 = 2.5 (Center of middle block)
+    # If 4x4: 4/2 = 2.0 (Line between blocks)
+    off_x = (cols / 2.0) + MANUAL_OFFSET_X
+    off_y = (rows / 2.0) + MANUAL_OFFSET_Y
     
-    scaled_off_x = off_x * RESOLUTION_SCALE
-    scaled_off_y = off_y * RESOLUTION_SCALE
-    scaled_x = x * RESOLUTION_SCALE
-    scaled_y = y * RESOLUTION_SCALE
-
-    row = int(round(scaled_off_y - scaled_y - 0.5))
-    col = int(round(scaled_off_x + scaled_x - 0.5))
+    # Scale coordinates
+    # Logic: 
+    #   World X+ -> Grid Col+
+    #   World Y+ -> Grid Row- (Inverted for image coords)
+    col_float = (off_x + x) * RESOLUTION_SCALE
+    row_float = (off_y - y) * RESOLUTION_SCALE
     
+    # Use floor to strictly bin coordinates
+    col = int(np.floor(col_float))
+    row = int(np.floor(row_float))
+    
+    # Clamp to bounds
     max_r = (rows * RESOLUTION_SCALE) - 1
     max_c = (cols * RESOLUTION_SCALE) - 1
     return max(0, min(row, max_r)), max(0, min(col, max_c))
@@ -93,11 +102,17 @@ def visualize_debug(env, hires_map, safe_map, start_node, goal_node, path_nodes,
 
 def grid_to_world(r, c, shape):
     rows, cols = shape
-    off_x = ((cols // 2) + 0.5) * RESOLUTION_SCALE
-    off_y = ((rows // 2) + 0.5) * RESOLUTION_SCALE
-    y = off_y - r - 0.5
-    x = c - off_x + 0.5
-    return float(x) / RESOLUTION_SCALE, float(y) / RESOLUTION_SCALE
+    # 1. FIX: Added MANUAL_OFFSET here to match world_to_grid
+    # 2. FIX: Used / 2.0 logic for consistency
+    off_x = (cols / 2.0) + MANUAL_OFFSET_X
+    off_y = (rows / 2.0) + MANUAL_OFFSET_Y
+    
+    # We add 0.5 to return the CENTER of the grid cell
+    # Inverse algebra of world_to_grid
+    x = (c + 0.5) / RESOLUTION_SCALE - off_x
+    y = off_y - (r + 0.5) / RESOLUTION_SCALE
+    
+    return x, y
 
 def get_closest_valid_node(node, maze_map):
     rows, cols = maze_map.shape
@@ -174,14 +189,29 @@ def astar_grid(maze_map, start, goal):
                     heapq.heappush(open_set, (tentative_g_score + heuristic(neighbor, goal), neighbor))
     return None
 
-def pd_controller(current_pos, target_pos, velocity):
-    kp, kd = 6.0, 5.0
+def pd_controller(current_pos, target_pos, current_vel, is_last_point=False):
+    # Aggressive Gains
+    kp = 15.0  # Increased from 8.0 to push harder
+    kd = 4.0   # Damping to prevent oscillating
+    
     error = target_pos - current_pos
-    force = (error * kp) - (velocity * kd)
-    return np.clip(force, -1.0, 1.0)
+    
+    # Standard PD
+    action = (error * kp) - (current_vel * kd)
+    
+    # SPEED HACK: If we are NOT at the final goal, clamp the braking force.
+    # If the velocity is pointing towards the target, don't let KD (damping) slow us down too much.
+    if not is_last_point:
+        # Dot product checks alignment. If velocity aligns with error, we are good.
+        alignment = np.dot(error, current_vel)
+        if alignment > 0:
+            # We are moving in the right direction, reduce damping effect to keep speed up
+            action += current_vel * 2.0 
+
+    return np.clip(action, -1.0, 1.0)
 
 # --- 3. LIVE VISUALIZATION FUNCTION ---
-def update_plot(env, hires_map, start_node, goal_node, path_nodes, current_pos_node, ax_real, ax_grid):
+def update_plot(env, hires_map, start_node, goal_node, path_nodes, current_pos_node, ax_real, ax_grid, target_node=None):
     """
     Updates the existing axes with new data.
     """
@@ -196,17 +226,24 @@ def update_plot(env, hires_map, start_node, goal_node, path_nodes, current_pos_n
     ax_grid.clear()
     ax_grid.imshow(hires_map, cmap='Greys', origin='upper')
     
-    # Plot Static Elements (Path, Start, Goal)
+    # --- VISUALIZE PATH NODES ---
     if path_nodes:
         rs = [p[0] for p in path_nodes]
         cs = [p[1] for p in path_nodes]
-        ax_grid.plot(cs, rs, c='blue', linewidth=2, alpha=0.5, label="Planned Path")
+        # Draw the line
+        ax_grid.plot(cs, rs, c='blue', linewidth=1, alpha=0.5, label="Path Line")
+        # Draw the individual NODES (What you asked for)
+        ax_grid.scatter(cs, rs, c='cyan', s=10, marker='o', alpha=0.8, zorder=2, label="Nodes")
         
     ax_grid.scatter(start_node[1], start_node[0], c='green', s=100, label="Start")
     ax_grid.scatter(goal_node[1], goal_node[0], c='red', s=150, marker='*', label="Goal")
     
     # Plot Dynamic Element (Current Agent Position)
     ax_grid.scatter(current_pos_node[1], current_pos_node[0], c='orange', s=120, edgecolors='black', label="Agent")
+    
+    # Plot the IMMEDIATE TARGET (The node we are aiming at) 
+    if target_node is not None:
+        ax_grid.scatter(target_node[1], target_node[0], c='magenta', s=150, marker='x', linewidth=3, zorder=5, label="Target")
     
     ax_grid.set_title(f"Grid Tracking (Scale {RESOLUTION_SCALE}x)")
     ax_grid.legend(loc='upper right', fontsize='small')
@@ -217,7 +254,7 @@ def update_plot(env, hires_map, start_node, goal_node, path_nodes, current_pos_n
 
 def main_test():
     env = gym.make(ENV_ID, render_mode="rgb_array", max_episode_steps=1000, reward_type='dense')
-    
+
     raw_map = np.array(env.unwrapped.maze.maze_map)
     original_shape = raw_map.shape
     hires_map = inflate_maze(raw_map, RESOLUTION_SCALE)
@@ -271,6 +308,7 @@ def main():
     env = gym.make(ENV_ID, render_mode="rgb_array", max_episode_steps=1000, reward_type='dense')
     
     raw_map = np.array(env.unwrapped.maze.maze_map)
+
     original_shape = raw_map.shape
     hires_map = inflate_maze(raw_map, RESOLUTION_SCALE)
     safe_map = inflate_walls(hires_map, radius=3)
@@ -306,23 +344,23 @@ def main():
             continue
             
         done = False
-        current_path_idx = 0
+        current_path_idx = 3
         
         # 1. Find the closest node to our actual position
-        start_world_pos = np.array(start_xy)
-        closest_dist = float('inf')
-        closest_idx = 0
+        #start_world_pos = np.array(start_xy)
+        #closest_dist = float('inf')
+        #closest_idx = 0
         
-        for i, node in enumerate(path_nodes):
-            node_pos = np.array(grid_to_world(*node, original_shape))
-            dist = np.linalg.norm(start_world_pos - node_pos)
-            if dist < closest_dist:
-                closest_dist = dist
-                closest_idx = i
+        #for i, node in enumerate(path_nodes):
+        #    node_pos = np.array(grid_to_world(*node, original_shape))
+        #    dist = np.linalg.norm(start_world_pos - node_pos)
+        #    if dist < closest_dist:
+        #        closest_dist = dist
+        #        closest_idx = i
                 
         # 2. Set our initial target to be at least 'lookahead' steps ahead of that closest point
         # With Scale 10, lookahead=5 is about 0.5 meters, which is a good "Launch vector"
-        current_path_idx = min(closest_idx + 2, len(path_nodes) - 1)
+        #current_path_idx = min(closest_idx + 1, len(path_nodes) - 1)
         episode_data = []
         step_count = 0
         
@@ -333,16 +371,10 @@ def main():
             
             current_pos = obs['observation'][:2]
             current_vel = obs['observation'][2:]
-            
-            # --- VISUALIZATION UPDATE ---
-            if SHOW_VISUALIZATION:
-                # Convert current pos to grid for plotting
-                current_node = world_to_grid(current_pos[0], current_pos[1], original_shape)
-                update_plot(env, safe_map, start_node, goal_node, path_nodes, current_node, ax1, ax2)
                 
             
             # --- CONTROL LOGIC ---
-            lookahead = 2 
+            lookahead = 5
             
             if current_path_idx < len(path_nodes):
                 # Instead of aiming at 'current_path_idx', we aim ahead!
@@ -358,6 +390,12 @@ def main():
                 target_world = goal_xy
 
             action = pd_controller(current_pos, target_world, current_vel)
+
+            if SHOW_VISUALIZATION:
+                current_node = world_to_grid(current_pos[0], current_pos[1], original_shape)
+                # Pass 'target_node' to the update function
+                update_plot(env, safe_map, start_node, goal_node, path_nodes, current_node, ax1, ax2, target_node)
+
             next_obs, reward, terminated, truncated, _ = env.step(action)
 
             if reward >= 0.85:
